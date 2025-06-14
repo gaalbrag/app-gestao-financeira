@@ -1,60 +1,100 @@
-
 import React from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Layout from './components/layout/Layout';
+import { HashRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom';
+import { DataProvider } from './contexts/DataContext';
+import Header from './components/layout/Header';
+import Sidebar, { AdminSidebar } from './components/layout/Sidebar'; // AdminSidebar is used for /admin/* routes
 import DashboardPage from './pages/DashboardPage';
-import ExpenseListPage from './pages/expenses/ExpenseListPage';
-import NewExpensePage from './pages/expenses/NewExpensePage';
-import RevenueListPage from './pages/revenues/RevenueListPage';
-import NewRevenuePage from './pages/revenues/NewRevenuePage';
-import CostCenterAdminPage from './pages/costcenters/CostCenterAdminPage';
-import ProjectBudgetReportPage from './pages/reports/ProjectBudgetReportPage';
-import CashFlowReportPage from './pages/reports/CashFlowReportPage';
-import PaymentHistoryPage from './pages/expenses/PaymentHistoryPage';
-import ReceiptHistoryPage from './pages/revenues/ReceiptHistoryPage';
 
-// Placeholder Admin Pages
-import ProjectsAdminPage from './pages/admin/ProjectsAdminPage';
-import CashAccountsAdminPage from './pages/admin/CashAccountsAdminPage';
-import SuppliersAdminPage from './pages/admin/SuppliersAdminPage';
-import CustomersAdminPage from './pages/admin/CustomersAdminPage';
-import RevenueCategoriesAdminPage from './pages/admin/RevenueCategoriesAdminPage';
+// Admin/Cadastros Pages
+import CostCentersPage from './pages/admin/CostCentersPage';
+import ProjectsPage from './pages/admin/ProjectsPage';
+import SuppliersPage from './pages/admin/SuppliersPage';
+import CustomersPage from './pages/admin/CustomersPage';
+import CashAccountsPage from './pages/admin/CashAccountsPage';
+import RevenueCategoriesPage from './pages/admin/RevenueCategoriesPage';
+import ProductsPage from './pages/admin/ProductsPage'; // New Page
+
+// Expense Pages
+import NewExpensePage from './pages/expenses/NewExpensePage';
+import ExpenseListPage from './pages/expenses/ExpenseListPage';
+
+// Revenue Pages
+import NewRevenuePage from './pages/revenue/NewRevenuePage';
+import RevenueListPage from './pages/revenue/RevenueListPage';
+
+// Report Pages
+import ProjectBudgetReportPage from './pages/reports/ProjectBudgetReportPage';
+import CashAccountTransactionsReportPage from './pages/reports/CashAccountTransactionsReportPage';
+import CashFlowReportPage from './pages/reports/CashFlowReportPage'; // Updated
+import ProductPurchaseHistoryReportPage from './pages/reports/ProductPurchaseHistoryReportPage'; // New Page
+
+
+const MainLayout: React.FC = () => (
+  <div className="flex min-h-screen bg-neutral-bg">
+    <Sidebar />
+    <div className="flex-1 flex flex-col">
+      <Header />
+      <main className="flex-1 overflow-y-auto">
+        <Outlet />
+      </main>
+    </div>
+  </div>
+);
+
+// This layout is for /admin/* routes, conceptually "Cadastros"
+const AdminSectionLayout: React.FC = () => ( 
+  <div className="flex flex-1">
+    <AdminSidebar /> {/* This sidebar contains items like Projects, Suppliers, Products etc. */}
+    <div className="flex-1 overflow-y-auto bg-neutral-bg">
+      <Outlet />
+    </div>
+  </div>
+);
 
 
 const App: React.FC = () => {
   return (
-    <HashRouter>
-      <Layout>
+    <DataProvider>
+      <HashRouter>
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          
-          <Route path="/despesas" element={<ExpenseListPage />} />
-          <Route path="/despesas/nova" element={<NewExpensePage />} />
-          <Route path="/despesas/historico-pagamentos" element={<PaymentHistoryPage />} />
-          
-          <Route path="/receitas" element={<RevenueListPage />} />
-          <Route path="/receitas/nova" element={<NewRevenuePage />} />
-          <Route path="/receitas/historico-recebimentos" element={<ReceiptHistoryPage />} />
+          <Route path="/" element={<MainLayout />}>
+            <Route index element={<DashboardPage />} />
+            
+            {/* "Cadastros" section, internally routed via /admin */}
+            <Route path="admin" element={<AdminSectionLayout />}> 
+              <Route index element={<Navigate to="projects" replace />} /> {/* Default to projects */}
+              <Route path="projects" element={<ProjectsPage />} />
+              <Route path="suppliers" element={<SuppliersPage />} />
+              <Route path="customers" element={<CustomersPage />} />
+              <Route path="cash-accounts" element={<CashAccountsPage />} />
+              <Route path="revenue-categories" element={<RevenueCategoriesPage />} />
+              <Route path="cost-centers" element={<CostCentersPage />} />
+              <Route path="products" element={<ProductsPage />} /> {/* New products route */}
+            </Route>
 
-          {/* Route for Cost Centers remains, but it's also part of new Admin section */}
-          <Route path="/centros-custo" element={<CostCenterAdminPage />} /> 
-          
-          <Route path="/relatorios/orcamento-projeto" element={<ProjectBudgetReportPage />} />
-          <Route path="/relatorios/fluxo-caixa" element={<CashFlowReportPage />} />
+            <Route path="expenses">
+              <Route index element={<ExpenseListPage />} />
+              <Route path="new" element={<NewExpensePage />} />
+            </Route>
 
-          {/* New Admin Section Routes */}
-          <Route path="/cadastros/centros-custo" element={<CostCenterAdminPage />} />
-          <Route path="/cadastros/projetos" element={<ProjectsAdminPage />} />
-          <Route path="/cadastros/contas-caixa" element={<CashAccountsAdminPage />} />
-          <Route path="/cadastros/fornecedores" element={<SuppliersAdminPage />} />
-          <Route path="/cadastros/clientes" element={<CustomersAdminPage />} />
-          <Route path="/cadastros/categorias-receita" element={<RevenueCategoriesAdminPage />} />
-          
-          <Route path="*" element={<Navigate to="/dashboard" replace />} /> {/* Fallback route */}
+            <Route path="revenue">
+              <Route index element={<RevenueListPage />} />
+              <Route path="new" element={<NewRevenuePage />} />
+            </Route>
+
+            <Route path="reports">
+              <Route index element={<Navigate to="project-budget" replace />} />
+              <Route path="project-budget" element={<ProjectBudgetReportPage />} />
+              <Route path="cash-account-transactions" element={<CashAccountTransactionsReportPage />} />
+              <Route path="cash-flow" element={<CashFlowReportPage />} />
+              <Route path="product-purchase-history" element={<ProductPurchaseHistoryReportPage />} /> {/* New report route */}
+            </Route>
+            
+            <Route path="*" element={<Navigate to="/" replace />} /> {/* Fallback route */}
+          </Route>
         </Routes>
-      </Layout>
-    </HashRouter>
+      </HashRouter>
+    </DataProvider>
   );
 };
 

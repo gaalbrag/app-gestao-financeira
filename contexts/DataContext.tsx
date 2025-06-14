@@ -1,273 +1,331 @@
-import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { 
-  ExpenseEntry, RevenueEntry, Settlement, Project, Supplier, Customer, CashAccount, CostCenter, RevenueCategory, 
-  CostCenterId, ProjectId, SupplierId, CustomerId, CashAccountId, RevenueCategoryId, ExpenseId, RevenueId, SettlementId, EntryStatus
-} from '../types';
-import { 
-  INITIAL_PROJECTS, INITIAL_SUPPLIERS, INITIAL_CUSTOMERS, INITIAL_CASH_ACCOUNTS, INITIAL_COST_CENTERS, INITIAL_REVENUE_CATEGORIES 
-} from '../constants';
 
-interface AppState {
+import React, { createContext, useState, useContext, useCallback, ReactNode, useMemo } from 'react';
+import { Project, Supplier, Customer, CashAccount, RevenueCategory, CostCenterNode, ExpenseEntry, RevenueEntry, Settlement, EntryStatus, LineItem, Product } from '../types';
+
+// Define more precise argument types for addExpenseEntry and addRevenueEntry
+type ExpenseEntryData = Omit<ExpenseEntry, 'id' | 'totalAmount' | 'settledAmount' | 'status' | 'lineItems'> & {
+  lineItems: Array<Omit<LineItem, 'id'>>;
+};
+
+type RevenueEntryData = Omit<RevenueEntry, 'id' | 'totalAmount' | 'settledAmount' | 'status' | 'lineItems'> & {
+  lineItems: Array<Omit<LineItem, 'id'>>;
+};
+
+interface DataContextState {
   projects: Project[];
   suppliers: Supplier[];
   customers: Customer[];
   cashAccounts: CashAccount[];
-  costCenters: CostCenter[]; // Stored as a flat list, hierarchy managed by parentId
   revenueCategories: RevenueCategory[];
+  costCenters: CostCenterNode[];
+  products: Product[];
   expenseEntries: ExpenseEntry[];
   revenueEntries: RevenueEntry[];
   settlements: Settlement[];
-  nextExpenseId: number;
-  nextRevenueId: number;
-  nextSettlementId: number;
-  nextProjectId: number;
-  nextSupplierId: number;
-  nextCustomerId: number;
-  nextCashAccountId: number;
-  nextCostCenterId: number;
-  nextRevenueCategoryId: number;
-  nextGenericItemId: number; // For line items etc.
 }
 
-type Action =
-  | { type: 'ADD_EXPENSE_ENTRY'; payload: ExpenseEntry }
-  | { type: 'ADD_REVENUE_ENTRY'; payload: RevenueEntry }
-  | { type: 'ADD_SETTLEMENT'; payload: Settlement }
-  | { type: 'UPDATE_EXPENSE_ENTRY'; payload: ExpenseEntry }
-  | { type: 'UPDATE_REVENUE_ENTRY'; payload: RevenueEntry }
-  | { type: 'ADD_COST_CENTER'; payload: CostCenter }
-  | { type: 'UPDATE_COST_CENTER'; payload: CostCenter }
-  | { type: 'DELETE_COST_CENTER'; payload: CostCenterId }
-  // TODO: Add actions for Project, Supplier, Customer, CashAccount, RevenueCategory
-  | { type: 'LOAD_DATA'; payload: AppState };
+interface DataContextActions {
+  addProject: (project: Omit<Project, 'id'>) => void;
+  updateProject: (project: Project) => void;
+  deleteProject: (projectId: string) => void;
+  
+  addSupplier: (supplier: Omit<Supplier, 'id'>) => void;
+  updateSupplier: (supplier: Supplier) => void;
+  deleteSupplier: (supplierId: string) => void;
 
-const initialState: AppState = {
-  projects: INITIAL_PROJECTS,
-  suppliers: INITIAL_SUPPLIERS,
-  customers: INITIAL_CUSTOMERS,
-  cashAccounts: INITIAL_CASH_ACCOUNTS,
-  costCenters: INITIAL_COST_CENTERS.reduce((acc: CostCenter[], cc: CostCenter) => { 
-    const collectChildren = (center: CostCenter, parentId: CostCenterId | null = null): CostCenter[] => {
-        const { children: originalChildren, ...nodeData } = center; 
-        const currentFlatNode: CostCenter = {
-             ...nodeData, 
-             parentId: parentId,
-        };
-        let result: CostCenter[] = [currentFlatNode];
-        if (originalChildren) {
-            originalChildren.forEach(child => {
-                result = [...result, ...collectChildren(child, center.id)];
-            });
-        }
-        return result;
-    };
-    return [...acc, ...collectChildren(cc)]; // Use spread syntax for concatenation
-  }, [] as CostCenter[]),
-  revenueCategories: INITIAL_REVENUE_CATEGORIES,
-  expenseEntries: [],
-  revenueEntries: [],
-  settlements: [],
-  nextExpenseId: 1,
-  nextRevenueId: 1,
-  nextSettlementId: 1,
-  nextProjectId: (INITIAL_PROJECTS.length || 0) + 1,
-  nextSupplierId: (INITIAL_SUPPLIERS.length || 0) + 1,
-  nextCustomerId: (INITIAL_CUSTOMERS.length || 0) + 1,
-  nextCashAccountId: (INITIAL_CASH_ACCOUNTS.length || 0) + 1,
-  nextCostCenterId: 200, 
-  nextRevenueCategoryId: (INITIAL_REVENUE_CATEGORIES.length || 0) + 1,
-  nextGenericItemId: 1,
-};
+  addCustomer: (customer: Omit<Customer, 'id'>) => void;
+  updateCustomer: (customer: Customer) => void;
+  deleteCustomer: (customerId: string) => void;
 
-const dataReducer = (state: AppState, action: Action): AppState => {
-  switch (action.type) {
-    case 'LOAD_DATA':
-      return action.payload;
-    case 'ADD_EXPENSE_ENTRY':
-      return { 
-        ...state, 
-        expenseEntries: [...state.expenseEntries, action.payload],
-        nextExpenseId: state.nextExpenseId + 1
-      };
-    case 'ADD_REVENUE_ENTRY':
-      return { 
-        ...state, 
-        revenueEntries: [...state.revenueEntries, action.payload],
-        nextRevenueId: state.nextRevenueId + 1 
-      };
-    case 'ADD_SETTLEMENT': {
-      const settlement = action.payload;
-      let updatedExpenseEntries = state.expenseEntries;
-      let updatedRevenueEntries = state.revenueEntries;
+  addCashAccount: (account: Omit<CashAccount, 'id'>) => void;
+  updateCashAccount: (account: CashAccount) => void;
+  deleteCashAccount: (accountId: string) => void;
 
-      if (settlement.type === 'payment') {
-        updatedExpenseEntries = state.expenseEntries.map(exp => {
-          if (exp.id === settlement.entryId) {
-            const newAmountPaid = exp.amountPaid + settlement.amountSettled;
-            let newStatus = exp.status;
-            if (newAmountPaid >= exp.totalAmount) newStatus = EntryStatus.PAID;
-            else if (newAmountPaid > 0) newStatus = EntryStatus.PARTIALLY_PAID;
-            else newStatus = EntryStatus.PENDING;
-            return { ...exp, amountPaid: newAmountPaid, status: newStatus };
-          }
-          return exp;
-        });
-      } else { // receipt
-        updatedRevenueEntries = state.revenueEntries.map(rev => {
-          if (rev.id === settlement.entryId) {
-            const newAmountPaid = rev.amountPaid + settlement.amountSettled;
-            let newStatus = rev.status;
-            if (newAmountPaid >= rev.totalAmount) newStatus = EntryStatus.PAID;
-            else if (newAmountPaid > 0) newStatus = EntryStatus.PARTIALLY_PAID;
-            else newStatus = EntryStatus.PENDING;
-            return { ...rev, amountPaid: newAmountPaid, status: newStatus };
-          }
-          return rev;
-        });
-      }
-      return { 
-        ...state, 
-        settlements: [...state.settlements, settlement],
-        expenseEntries: updatedExpenseEntries,
-        revenueEntries: updatedRevenueEntries,
-        nextSettlementId: state.nextSettlementId + 1
-      };
-    }
-    case 'UPDATE_EXPENSE_ENTRY': {
-      return {
-        ...state,
-        expenseEntries: state.expenseEntries.map(e => e.id === action.payload.id ? action.payload : e)
-      };
-    }
-    case 'UPDATE_REVENUE_ENTRY': {
-      return {
-        ...state,
-        revenueEntries: state.revenueEntries.map(r => r.id === action.payload.id ? action.payload : r)
-      };
-    }
-    case 'ADD_COST_CENTER':
-      return {
-        ...state,
-        costCenters: [...state.costCenters, { ...action.payload, isUserManaged: true }],
-        nextCostCenterId: state.nextCostCenterId + 1,
-      };
-    case 'UPDATE_COST_CENTER':
-      return {
-        ...state,
-        costCenters: state.costCenters.map(cc =>
-          cc.id === action.payload.id ? { ...action.payload, isUserManaged: true } : cc
-        ),
-      };
-    case 'DELETE_COST_CENTER': {
-      // Recursively find all children IDs to delete them as well
-      const idsToDelete = new Set<CostCenterId>();
-      idsToDelete.add(action.payload);
-      
-      let currentIdsToCheck = [action.payload];
-      while(currentIdsToCheck.length > 0) {
-        const parentId = currentIdsToCheck.pop()!;
-        state.costCenters.forEach(cc => {
-          if (cc.parentId === parentId) {
-            idsToDelete.add(cc.id);
-            currentIdsToCheck.push(cc.id);
-          }
-        });
-      }
-      return {
-        ...state,
-        costCenters: state.costCenters.filter(cc => !idsToDelete.has(cc.id)),
-      };
-    }
-    default:
-      return state;
-  }
-};
+  addRevenueCategory: (category: Omit<RevenueCategory, 'id'>) => void;
+  updateRevenueCategory: (category: RevenueCategory) => void;
+  deleteRevenueCategory: (categoryId: string) => void;
 
-const DataContext = createContext<{ 
-    state: AppState; 
-    dispatch: React.Dispatch<Action>;
-    generateId: (type: 'expense' | 'revenue' | 'settlement' | 'project' | 'supplier' | 'customer' | 'cashAccount' | 'costCenter' | 'revenueCategory' | 'lineItem') => string;
-    getCostCenterTree: () => CostCenter[];
-} | undefined>(undefined);
+  addCostCenterNode: (name: string, parentId: string | null) => CostCenterNode;
+  updateCostCenterNode: (id: string, newName: string, isLaunchable: boolean) => void;
+  deleteCostCenterNode: (id: string) => void;
+  getCostCenterPath: (id: string | null) => string;
+
+  addProduct: (product: Omit<Product, 'id'>) => void;
+  updateProduct: (product: Product) => void;
+  deleteProduct: (productId: string) => void;
+
+  addExpenseEntry: (entry: ExpenseEntryData) => void; // Updated type
+  updateExpenseEntry: (entry: ExpenseEntry) => void; 
+  
+  addRevenueEntry: (entry: RevenueEntryData) => void; // Updated type
+  updateRevenueEntry: (entry: RevenueEntry) => void;
+
+  addSettlement: (settlement: Omit<Settlement, 'id'>) => void;
+}
+
+const initialCostCenters: CostCenterNode[] = [
+  { id: '1', name: 'Geral & Administrativo', parentId: null, children: [
+    { id: '1-1', name: 'Salários', parentId: '1', children: [], isLaunchable: true },
+    { id: '1-2', name: 'Aluguel Escritório', parentId: '1', children: [], isLaunchable: true },
+  ], isLaunchable: false},
+  { id: '2', name: 'Custos de Construção', parentId: null, children: [
+    { id: '2-1', name: 'Materiais', parentId: '2', children: [
+      { id: '2-1-1', name: 'Cimento', parentId: '2-1', children: [], isLaunchable: true },
+      { id: '2-1-2', name: 'Aço', parentId: '2-1', children: [], isLaunchable: true },
+    ], isLaunchable: false},
+    { id: '2-2', name: 'Mão de Obra', parentId: '2', children: [], isLaunchable: true },
+    { id: '2-3', name: 'Aluguel de Equipamentos', parentId: '2', children: [], isLaunchable: true },
+  ], isLaunchable: false},
+];
+
+
+const DataContext = createContext<(DataContextState & DataContextActions) | undefined>(undefined);
 
 export const DataProvider: React.FC<{children: ReactNode}> = ({ children }) => {
-  const [state, dispatch] = useReducer(dataReducer, initialState, (init) => {
-    const storedData = localStorage.getItem('apusAppData');
-    if (storedData) {
-      try {
-        const parsed = JSON.parse(storedData);
-         // Helper to extract numeric part of ID
-        const getMaxIdNum = (items: {id: string}[], prefixToRemove: string | RegExp = /[^0-9]/g) => {
-          if (!items || items.length === 0) return 0;
-          return Math.max(...items.map(item => parseInt(String(item.id).replace(prefixToRemove, '')) || 0), 0);
-        };
+  const [projects, setProjects] = useState<Project[]>([
+    {id: 'p1', name: 'Sky Tower Residencial', address: 'Rua Principal, 123', startDate: new Date().toISOString()},
+    {id: 'p2', name: 'Complexo de Escritórios Central', address: 'Avenida Carvalho, 456', startDate: new Date().toISOString()},
+  ]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([
+    {id: 's1', name: 'Global Materiais de Construção', email: 'vendas@global.com'},
+    {id: 's2', name: 'Aluguel de Maquinário Pesado Inc.', email: 'aluguel@hmr.com'},
+  ]);
+  const [customers, setCustomers] = useState<Customer[]>([
+    {id: 'c1', name: 'Futuros Compradores de Imóveis LLC', email: 'contato@fcimoveis.com'},
+    {id: 'c2', name: 'Imobiliária Comercial Prime', email: 'info@icprime.com'},
+  ]);
+  const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([
+    {id: 'ca1', name: 'Conta Banco Principal', bank: 'Banco Alfa', agency: '001', accountNumber: '12345-6', balance: 100000},
+    {id: 'ca2', name: 'Caixa Pequeno', balance: 5000},
+  ]);
+  const [revenueCategories, setRevenueCategories] = useState<RevenueCategory[]>([
+    {id: 'rc1', name: 'Venda de Unidade'},
+    {id: 'rc2', name: 'Taxa de Serviço'},
+  ]);
+  const [costCenters, setCostCenters] = useState<CostCenterNode[]>(initialCostCenters);
+  const [products, setProducts] = useState<Product[]>([
+    {id: 'prod1', name: 'Cimento CPII (saco 50kg)', unit: 'sc'},
+    {id: 'prod2', name: 'Areia Média Lavada', unit: 'm³'},
+    {id: 'prod3', name: 'Brita 1', unit: 'm³'},
+    {id: 'prod4', name: 'Vergalhão CA50 10mm (barra 12m)', unit: 'br'},
+  ]);
+  const [expenseEntries, setExpenseEntries] = useState<ExpenseEntry[]>([]);
+  const [revenueEntries, setRevenueEntries] = useState<RevenueEntry[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
 
-        return {
-          ...initialState, 
-          ...parsed,        
-          nextExpenseId: parsed.expenseEntries?.length ? getMaxIdNum(parsed.expenseEntries, /EXP-\d{4}-/g) + 1 : init.nextExpenseId,
-          nextRevenueId: parsed.revenueEntries?.length ? getMaxIdNum(parsed.revenueEntries, /REV-\d{4}-/g) + 1 : init.nextRevenueId,
-          nextSettlementId: parsed.settlements?.length ? getMaxIdNum(parsed.settlements, /SET-(P|R)-\d{4}-/g) + 1 : init.nextSettlementId,
-          nextCostCenterId: parsed.costCenters?.length ? getMaxIdNum(parsed.costCenters, /cc-(user-)?/g) + 1 : init.nextCostCenterId,
-        };
-      } catch (error) {
-        console.error("Failed to parse stored data:", error);
-        localStorage.removeItem('apusAppData'); 
-        return init;
-      }
+  const generateId = () => crypto.randomUUID();
+
+  // CRUD Operations
+  const crudOperations = <T extends { id: string }>(
+    items: T[], 
+    setItems: React.Dispatch<React.SetStateAction<T[]>>
+  ) => ({
+    add: (item: Omit<T, 'id'>) => {
+      const newItem = { ...item, id: generateId() } as T;
+      setItems(prev => [...prev, newItem]);
+      return newItem;
+    },
+    update: (updatedItem: T) => {
+      setItems(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+    },
+    delete: (id: string) => {
+      setItems(prev => prev.filter(item => item.id !== id));
     }
-    return init;
   });
 
-  useEffect(() => {
-    localStorage.setItem('apusAppData', JSON.stringify(state));
-  }, [state]);
+  const projectOps = crudOperations(projects, setProjects);
+  const supplierOps = crudOperations(suppliers, setSuppliers);
+  const customerOps = crudOperations(customers, setCustomers);
+  const cashAccountOps = crudOperations(cashAccounts, setCashAccounts);
+  const revenueCategoryOps = crudOperations(revenueCategories, setRevenueCategories);
+  const productOps = crudOperations(products, setProducts);
 
-  const generateId = (type: 'expense' | 'revenue' | 'settlement' | 'project' | 'supplier' | 'customer' | 'cashAccount' | 'costCenter' | 'revenueCategory' | 'lineItem'): string => {
-    const year = new Date().getFullYear();
-    switch (type) {
-      case 'expense': return `EXP-${year}-${String(state.nextExpenseId).padStart(5, '0')}`;
-      case 'revenue': return `REV-${year}-${String(state.nextRevenueId).padStart(5, '0')}`;
-      case 'settlement': {
-        // This needs a bit more info to determine P or R, or a more generic SET id
-        // For now, defaulting, but this might need adjustment based on where it's called
-        const settlementPrefix = state.nextSettlementId % 2 === 0 ? 'P' : 'R'; // Placeholder logic
-        return `SET-${settlementPrefix}-${year}-${String(state.nextSettlementId).padStart(5, '0')}`;
+  const addCostCenterNode = useCallback((name: string, parentId: string | null): CostCenterNode => {
+    const newNode: CostCenterNode = { 
+      id: generateId(), 
+      name, 
+      parentId, 
+      children: [], 
+      isLaunchable: true // New nodes default to launchable
+    };
+    setCostCenters(prev => {
+      const updateChildren = (nodes: CostCenterNode[]): CostCenterNode[] => {
+        return nodes.map(node => {
+          if (node.id === parentId) {
+            // If parent was launchable, it might make sense to set it to non-launchable now it has children.
+            // For now, we leave this to manual user management.
+            return { ...node, children: [...node.children, newNode] };
+          }
+          if (node.children.length > 0) {
+            return { ...node, children: updateChildren(node.children) };
+          }
+          return node;
+        });
+      };
+      if (parentId === null) {
+        return [...prev, newNode];
       }
-      case 'costCenter': return `cc-user-${String(state.nextCostCenterId).padStart(3, '0')}`;
-      case 'lineItem': return `li-${Date.now()}-${String(state.nextGenericItemId).padStart(3,'0')}`;
-      // Add other cases
-      default: return `generic-${Date.now()}`;
+      return updateChildren(prev);
+    });
+    return newNode;
+  }, []);
+
+  const updateCostCenterNode = useCallback((id: string, newName: string, isLaunchable: boolean) => {
+    setCostCenters(prev => {
+      const updateNode = (nodes: CostCenterNode[]): CostCenterNode[] => {
+        return nodes.map(node => {
+          if (node.id === id) {
+            return { ...node, name: newName, isLaunchable: isLaunchable };
+          }
+          if (node.children.length > 0) {
+            return { ...node, children: updateNode(node.children) };
+          }
+          return node;
+        });
+      };
+      return updateNode(prev);
+    });
+  }, []);
+
+  const deleteCostCenterNode = useCallback((id: string) => {
+    setCostCenters(prev => {
+      const removeNode = (nodes: CostCenterNode[]): CostCenterNode[] => {
+        return nodes.filter(node => node.id !== id).map(node => ({
+          ...node,
+          children: node.children.length > 0 ? removeNode(node.children) : []
+        }));
+      };
+      return removeNode(prev);
+    });
+  }, []);
+
+  const getCostCenterPath = useCallback((id: string | null): string => {
+    if (!id) return '';
+    let path = '';
+    const findNodeAndPath = (nodes: CostCenterNode[], currentId: string, currentPath: string[]): boolean => {
+      for (const node of nodes) {
+        if (node.id === currentId) {
+          path = [...currentPath, node.name].join(' / ');
+          return true;
+        }
+        if (node.children.length > 0) {
+          if (findNodeAndPath(node.children, currentId, [...currentPath, node.name])) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    findNodeAndPath(costCenters, id, []);
+    return path;
+  }, [costCenters]);
+
+  const addExpenseEntry = useCallback((entryData: ExpenseEntryData) => { // Updated type
+    const processedLineItems: LineItem[] = entryData.lineItems.map(li => ({
+        ...li,
+        id: generateId(),
+        amount: (li.quantity && li.unitPrice) ? li.quantity * li.unitPrice : li.amount // Ensure amount is calculated if possible
+    }));
+    const totalAmount = processedLineItems.reduce((sum, item) => sum + item.amount, 0);
+    const newEntry: ExpenseEntry = {
+      ...entryData,
+      id: generateId(),
+      totalAmount,
+      settledAmount: 0,
+      status: EntryStatus.UNPAID,
+      lineItems: processedLineItems
+    };
+    setExpenseEntries(prev => [...prev, newEntry]);
+  }, []);
+  
+  const updateExpenseEntry = useCallback((updatedEntry: ExpenseEntry) => {
+    // Recalculate totalAmount if line items were part of the update.
+    const processedLineItems = updatedEntry.lineItems.map(li => ({
+        ...li,
+        amount: (li.quantity && li.unitPrice) ? li.quantity * li.unitPrice : li.amount
+    }));
+    const totalAmount = processedLineItems.reduce((sum, item) => sum + item.amount, 0);
+    const entryWithRecalculatedTotal = { ...updatedEntry, lineItems: processedLineItems, totalAmount };
+    setExpenseEntries(prev => prev.map(e => e.id === updatedEntry.id ? entryWithRecalculatedTotal : e));
+  }, []);
+
+  const addRevenueEntry = useCallback((entryData: RevenueEntryData) => { // Updated type
+    const processedLineItems: LineItem[] = entryData.lineItems.map(li => ({
+        ...li, 
+        id: generateId()
+    }));
+    const totalAmount = processedLineItems.reduce((sum, item) => sum + item.amount, 0);
+    const newEntry: RevenueEntry = {
+      ...entryData,
+      id: generateId(),
+      totalAmount,
+      settledAmount: 0,
+      status: EntryStatus.UNRECEIVED,
+      lineItems: processedLineItems
+    };
+    setRevenueEntries(prev => [...prev, newEntry]);
+  }, []);
+
+  const updateRevenueEntry = useCallback((updatedEntry: RevenueEntry) => {
+     // Recalculate totalAmount if line items were part of the update.
+    const totalAmount = updatedEntry.lineItems.reduce((sum, item) => sum + item.amount, 0);
+    const entryWithRecalculatedTotal = { ...updatedEntry, totalAmount };
+    setRevenueEntries(prev => prev.map(e => e.id === updatedEntry.id ? entryWithRecalculatedTotal : e));
+  }, []);
+
+  const addSettlement = useCallback((settlementData: Omit<Settlement, 'id'>) => {
+    const newSettlement: Settlement = { ...settlementData, id: generateId() };
+    setSettlements(prev => [...prev, newSettlement]);
+
+    if (settlementData.entryCategory === 'expense') {
+      setExpenseEntries(prevEntries => prevEntries.map(entry => {
+        if (entry.id === settlementData.entryId) {
+          const newSettledAmount = entry.settledAmount + settlementData.amount;
+          let newStatus = entry.status;
+          if (newSettledAmount >= entry.totalAmount) {
+            newStatus = EntryStatus.PAID;
+          } else if (newSettledAmount > 0) {
+            newStatus = EntryStatus.PARTIALLY_PAID;
+          }
+          return { ...entry, settledAmount: newSettledAmount, status: newStatus };
+        }
+        return entry;
+      }));
+    } else { // revenue
+        setRevenueEntries(prevEntries => prevEntries.map(entry => {
+        if (entry.id === settlementData.entryId) {
+          const newSettledAmount = entry.settledAmount + settlementData.amount;
+          let newStatus = entry.status;
+          if (newSettledAmount >= entry.totalAmount) {
+            newStatus = EntryStatus.RECEIVED;
+          } else if (newSettledAmount > 0) {
+            newStatus = EntryStatus.PARTIALLY_RECEIVED;
+          }
+          return { ...entry, settledAmount: newSettledAmount, status: newStatus };
+        }
+        return entry;
+      }));
     }
-  };
+  }, []);
 
-  const getCostCenterTree = (): CostCenter[] => {
-    const costCenters = state.costCenters;
-    const map = new Map<CostCenterId, CostCenter & { children: CostCenter[] }>(); // Ensure children is not optional here for map value
-    const roots: (CostCenter & { children: CostCenter[] })[] = [];
+  const value = useMemo(() => ({
+    projects, suppliers, customers, cashAccounts, revenueCategories, costCenters, products, expenseEntries, revenueEntries, settlements,
+    addProject: projectOps.add, updateProject: projectOps.update, deleteProject: projectOps.delete,
+    addSupplier: supplierOps.add, updateSupplier: supplierOps.update, deleteSupplier: supplierOps.delete,
+    addCustomer: customerOps.add, updateCustomer: customerOps.update, deleteCustomer: customerOps.delete,
+    addCashAccount: cashAccountOps.add, updateCashAccount: cashAccountOps.update, deleteCashAccount: cashAccountOps.delete,
+    addRevenueCategory: revenueCategoryOps.add, updateRevenueCategory: revenueCategoryOps.update, deleteRevenueCategory: revenueCategoryOps.delete,
+    addProduct: productOps.add, updateProduct: productOps.update, deleteProduct: productOps.delete,
+    addCostCenterNode, updateCostCenterNode, deleteCostCenterNode, getCostCenterPath,
+    addExpenseEntry, updateExpenseEntry, addRevenueEntry, updateRevenueEntry, addSettlement
+  }), [
+    projects, suppliers, customers, cashAccounts, revenueCategories, costCenters, products, expenseEntries, revenueEntries, settlements,
+    projectOps, supplierOps, customerOps, cashAccountOps, revenueCategoryOps, productOps,
+    addCostCenterNode, updateCostCenterNode, deleteCostCenterNode, getCostCenterPath,
+    addExpenseEntry, updateExpenseEntry, addRevenueEntry, updateRevenueEntry, addSettlement
+  ]);
 
-    costCenters.forEach(cc => {
-      map.set(cc.id, { ...cc, children: [] });
-    });
-
-    costCenters.forEach(cc => {
-      const node = map.get(cc.id)!;
-      if (cc.parentId && map.has(cc.parentId)) {
-        const parentNode = map.get(cc.parentId)!;
-        parentNode.children.push(node);
-      } else {
-        roots.push(node);
-      }
-    });
-    return roots;
-  };
-
-
-  return (
-    <DataContext.Provider value={{ state, dispatch, generateId, getCostCenterTree }}>
-      {children}
-    </DataContext.Provider>
-  );
+  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 };
 
 export const useData = () => {

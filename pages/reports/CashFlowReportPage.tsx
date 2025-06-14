@@ -1,127 +1,309 @@
-
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, ReactNode } from 'react';
 import { useData } from '../../contexts/DataContext';
-import { Settlement, FilterState } from '../../types';
-import Select from '../../components/ui/Select';
-import Input from '../../components/ui/Input';
+import { CashAccount, Settlement, ExpenseEntry, RevenueEntry, CashFlowReportTransaction } from '../../types';
+import SelectField from '../../components/ui/SelectField';
+import InputField from '../../components/ui/InputField';
 import Button from '../../components/ui/Button';
-import Table from '../../components/ui/Table';
-import { FiFilter } from 'react-icons/fi';
+import Table from '../../components/ui/Table'; // Assuming Table can handle CashFlowReportTransaction type
+import { ICONS } from '../../constants';
+import { exportToCsv, ExportColumn } from '../../utils/exportCsv';
 
+
+interface ReportFilters {
+  cashAccountCodeId: string;
+  startDate: string;
+  endDate: string;
+}
+
+interface TableColumn<T> {
+  header: string;
+  accessor: keyof T | ((item: T) => ReactNode);
+  className?: string;
+  headerClassName?: string;
+}
 
 const CashFlowReportPage: React.FC = () => {
-  const { state } = useData();
-  const [filters, setFilters] = useState<FilterState>({
-    cashAccountId: '', // All accounts by default
+  const { cashAccounts, settlements, expenseEntries, revenueEntries } = useData();
+  const [filters, setFilters] = useState<ReportFilters>({
+    cashAccountCodeId: cashAccounts.length > 0 ? cashAccounts[0].id : '',
     startDate: '',
     endDate: '',
   });
+  
+  const [reportData, setReportData] = useState<CashFlowReportTransaction[] | null>(null);
+  const [summary, setSummary] = useState<{
+    openingBalance: number;
+    totalInflows: number;
+    totalOutflows: number;
+    closingBalance: number;
+    netChange: number;
+  } | null>(null);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const formatCurrency = (amount: number) => 
-    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount);
+  const generateReport = () => {
+    const { cashAccountCodeId, startDate, endDate } = filters;
+    if (!cashAccountCodeId) {
+      alert("Por favor, selecione uma conta caixa.");
+      setReportData(null);
+      setSummary(null);
+      return;
+    }
 
-  const filteredSettlements = useMemo(() => {
-    return state.settlements.filter(s => {
-      const accountMatch = filters.cashAccountId ? s.cashAccountId === filters.cashAccountId : true;
-      let dateMatch = true;
-      if (filters.startDate && filters.endDate) {
-        dateMatch = s.settlementDate >= filters.startDate && s.settlementDate <= filters.endDate;
-      } else if (filters.startDate) {
-        dateMatch = s.settlementDate >= filters.startDate;
-      } else if (filters.endDate) {
-        dateMatch = s.settlementDate <= filters.endDate;
+    // Calculate Opening Balance
+    let openingBalance = 0;
+    const prePeriodSettlements = settlements.filter(s => {
+      let matches = s.cashAccountCodeId === cashAccountCodeId;
+      if (startDate) {
+        matches = matches && new Date(s.settlementDate) < new Date(startDate);
+      } else { // If no start date, consider all settlements before today for opening balance (might need adjustment based on exact requirement)
+         matches = matches && new Date(s.settlementDate) < new Date(new Date().setHours(0,0,0,0)); // beginning of today
       }
-      return accountMatch && dateMatch;
-    }).sort((a,b) => new Date(a.settlementDate).getTime() - new Date(b.settlementDate).getTime()); // Sort chronologically
-  }, [filters, state.settlements]);
+      return matches;
+    });
 
-  const summary = useMemo(() => {
-    const totalInflows = filteredSettlements
-      .filter(s => s.type === 'receipt')
-      .reduce((sum, s) => sum + s.amountSettled, 0);
-    const totalOutflows = filteredSettlements
-      .filter(s => s.type === 'payment')
-      .reduce((sum, s) => sum + s.amountSettled, 0);
-    return { totalInflows, totalOutflows, netCashFlow: totalInflows - totalOutflows };
-  }, [filteredSettlements]);
+    prePeriodSettlements.forEach(s => {
+      if (s.entryCategory === 'revenue') {
+        openingBalance += s.amount;
+      } else {
+        openingBalance -= s.amount;
+      }
+    });
 
-  const tableColumns: typeof Table<Settlement>['arguments']['columns'] = [
-    { Header: 'Data', accessor: 'settlementDate' },
+    // Filter settlements for the selected period
+    const periodSettlements = settlements.filter(s => {
+      let matches = s.cashAccountCodeId === cashAccountCodeId;
+      if (startDate) matches = matches && new Date(s.settlementDate) >= new Date(startDate);
+      if (endDate) {
+        const inclusiveEndDate = new Date(endDate);
+        inclusiveEndDate.setDate(inclusiveEndDate.getDate() + 1); // Make endDate inclusive
+        matches = matches && new Date(s.settlementDate) < inclusiveEndDate;
+      }
+      return matches;
+    }).sort((a, b) => new Date(a.settlementDate).getTime() - new Date(b.settlementDate).getTime()); // Sort by date ascending
+
+    let currentRunningBalance = openingBalance;
+    let totalInflows = 0;
+    let totalOutflows = 0;
+
+    const transactions: CashFlowReportTransaction[] = periodSettlements.map(settlement => {
+      let description = settlement.notes || '';
+      let inflow = 0;
+      let outflow = 0;
+
+      if (settlement.entryCategory === 'revenue') {
+        inflow = settlement.amount;
+        totalInflows += settlement.amount;
+        const relatedRevenue = revenueEntries.find(r => r.id === settlement.entryId);
+        description = `Receita: ${relatedRevenue?.description || settlement.notes || 'Recebimento Diversos'}`;
+      } else { // expense
+        outflow = settlement.amount;
+        totalOutflows += settlement.amount;
+        const relatedExpense = expenseEntries.find(e => e.id === settlement.entryId);
+        description = `Despesa: ${relatedExpense?.description || settlement.notes || 'Pagamento Diversos'}`;
+      }
+      currentRunningBalance += inflow - outflow;
+
+      return {
+        id: settlement.id,
+        date: new Date(settlement.settlementDate).toLocaleDateString('pt-BR'),
+        relatedEntryId: settlement.entryId.substring(0,8),
+        description,
+        inflow,
+        outflow,
+        runningBalance: currentRunningBalance,
+      };
+    });
+    
+    setReportData(transactions);
+    setSummary({
+      openingBalance,
+      totalInflows,
+      totalOutflows,
+      closingBalance: currentRunningBalance,
+      netChange: totalInflows - totalOutflows,
+    });
+  };
+  
+  useEffect(() => {
+    if (filters.cashAccountCodeId) {
+      generateReport();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.cashAccountCodeId, filters.startDate, filters.endDate, settlements, expenseEntries, revenueEntries, cashAccounts]);
+
+
+  const columns: TableColumn<CashFlowReportTransaction>[] = [
+    { header: 'Data', accessor: 'date', className: 'w-28' },
+    { header: 'Descrição', accessor: 'description', className: 'truncate max-w-md' },
     { 
-      Header: 'Descrição', 
-      accessor: (row) => {
-        const entry = row.type === 'payment' 
-            ? state.expenseEntries.find(e => e.id === row.entryId)
-            : state.revenueEntries.find(r => r.id === row.entryId);
-        
-        let partyName = 'N/A';
-        if (entry) {
-            if ('supplierId' in entry) { // ExpenseEntry
-                partyName = state.suppliers.find(s => s.id === entry.supplierId)?.name || 'Fornecedor Desconhecido';
-            } else if ('customerId' in entry) { // RevenueEntry
-                partyName = state.customers.find(c => c.id === entry.customerId)?.name || 'Cliente Desconhecido';
-            }
-        }
-        return `${row.type === 'payment' ? 'Pagamento para' : 'Recebimento de'} ${partyName} (Ref: ${row.entryId})`;
-      } 
+      header: 'Entrada (R$)', 
+      accessor: (item) => item.inflow > 0 ? item.inflow.toFixed(2) : '-',
+      className: 'w-32 text-right text-green-600 font-medium'
     },
     { 
-      Header: 'Entrada (R$)', 
-      accessor: row => row.type === 'receipt' ? formatCurrency(row.amountSettled) : '-',
-      cellClassName: 'text-right text-green-600 font-semibold'
+      header: 'Saída (R$)', 
+      accessor: (item) => item.outflow > 0 ? item.outflow.toFixed(2) : '-',
+      className: 'w-32 text-right text-red-600 font-medium'
     },
     { 
-      Header: 'Saída (R$)', 
-      accessor: row => row.type === 'payment' ? formatCurrency(row.amountSettled) : '-',
-      cellClassName: 'text-right text-red-600 font-semibold'
+      header: 'Saldo (R$)', 
+      accessor: (item) => item.runningBalance.toFixed(2),
+      className: 'w-32 text-right font-semibold'
     },
-    { Header: 'Conta Caixa', accessor: row => state.cashAccounts.find(ca => ca.id === row.cashAccountId)?.name || 'N/A' },
   ];
 
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-semibold text-primary">Relatório de Fluxo de Caixa</h2>
-      
-      <div className="bg-white p-4 rounded-lg shadow-md space-y-4 md:flex md:space-x-4 items-end">
-        <Select label="Selecionar Conta Caixa" name="cashAccountId" value={filters.cashAccountId || ''} onChange={handleFilterChange} containerClassName="flex-1">
-          <option value="">Todas as Contas</option>
-          {state.cashAccounts.map(ca => <option key={ca.id} value={ca.id}>{ca.name}</option>)}
-        </Select>
-        <Input label="Data Inicial" type="date" name="startDate" value={filters.startDate || ''} onChange={handleFilterChange} containerClassName="flex-1"/>
-        <Input label="Data Final" type="date" name="endDate" value={filters.endDate || ''} onChange={handleFilterChange} containerClassName="flex-1"/>
-         <Button variant="ghost" onClick={() => setFilters({ cashAccountId: '', startDate: '', endDate: ''})} leftIcon={<FiFilter />}>Limpar Filtros</Button>
-      </div>
+  const handleExport = () => {
+    if (!reportData || !summary) {
+        alert("Não há dados para exportar. Gere o relatório primeiro.");
+        return;
+    }
 
-      <div className="bg-white p-6 rounded-lg shadow-md">
-        <h3 className="text-xl font-semibold text-primary mb-4">Resumo do Período</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-green-100 p-4 rounded-md shadow">
-                <p className="text-sm text-green-700">Total de Entradas</p>
-                <p className="text-2xl font-bold text-green-700">{formatCurrency(summary.totalInflows)}</p>
-            </div>
-            <div className="bg-red-100 p-4 rounded-md shadow">
-                <p className="text-sm text-red-700">Total de Saídas</p>
-                <p className="text-2xl font-bold text-red-700">{formatCurrency(summary.totalOutflows)}</p>
-            </div>
-            <div className={`${summary.netCashFlow >=0 ? 'bg-blue-100' : 'bg-orange-100'} p-4 rounded-md shadow`}>
-                <p className={`text-sm ${summary.netCashFlow >=0 ? 'text-blue-700' : 'text-orange-700'}`}>Fluxo de Caixa Líquido</p>
-                <p className={`text-2xl font-bold ${summary.netCashFlow >=0 ? 'text-blue-700' : 'text-orange-700'}`}>{formatCurrency(summary.netCashFlow)}</p>
-            </div>
+    const exportableReportData: ExportColumn<CashFlowReportTransaction>[] = columns.map(col => ({
+        header: col.header,
+        accessor: col.accessor as ExportColumn<CashFlowReportTransaction>['accessor'],
+    }));
+
+    // Prepare summary data for CSV
+    const summaryRows = [
+        { field: "Saldo Anterior", value: summary.openingBalance.toFixed(2) },
+        { field: "Total Entradas", value: summary.totalInflows.toFixed(2) },
+        { field: "Total Saídas", value: summary.totalOutflows.toFixed(2) },
+        { field: "Saldo Atual", value: summary.closingBalance.toFixed(2) },
+        { field: "Movimentação Líquida", value: summary.netChange.toFixed(2) },
+    ];
+    
+    // Create CSV content manually
+    let csvContent = "\uFEFF"; // BOM for UTF-8
+    // Summary Headers
+    csvContent += "Campo,Valor\n";
+    summaryRows.forEach(row => {
+        csvContent += `"${row.field}","${row.value}"\n`;
+    });
+    csvContent += "\n"; // Spacer
+
+    // Table Headers
+    csvContent += exportableReportData.map(col => `"${col.header.replace(/"/g, '""')}"`).join(',') + '\n';
+    
+    // Table Data
+    reportData.forEach(transaction => {
+        const row = exportableReportData.map(col => {
+            let cellValue: any;
+             if (typeof col.accessor === 'function') {
+                cellValue = (col.accessor as (item: CashFlowReportTransaction) => ReactNode)(transaction);
+                // Basic text extraction for ReactNode, might need more robust solution
+                if(typeof cellValue === 'object' && cellValue !== null && 'props' in cellValue) cellValue = cellValue.props.children;
+
+             } else {
+                cellValue = transaction[col.accessor as keyof CashFlowReportTransaction];
+             }
+             const stringValue = String(cellValue === null || typeof cellValue === 'undefined' ? '' : cellValue);
+             if (stringValue.includes(',')) return `"${stringValue.replace(/"/g, '""')}"`;
+             return stringValue;
+        }).join(',');
+        csvContent += row + '\n';
+    });
+    
+    const selectedAccountName = cashAccounts.find(ca => ca.id === filters.cashAccountCodeId)?.name || 'fluxo_caixa';
+    const filename = `fluxo_caixa_${selectedAccountName.replace(/\s+/g, '_')}.csv`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    if (link.download !== undefined) {
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", filename);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    } else {
+        alert("Seu navegador não suporta downloads diretos.");
+    }
+  };
+
+
+  const selectedAccount = cashAccounts.find(ca => ca.id === filters.cashAccountCodeId);
+
+  return (
+    <div className="p-6 bg-neutral-bg min-h-full">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-semibold text-primary-dark">Relatório de Fluxo de Caixa</h1>
+        <Button onClick={handleExport} variant="secondary" leftIcon={ICONS.DOWNLOAD} disabled={!reportData || !summary}>
+            Exportar CSV
+        </Button>
+      </div>
+      
+      <div className="bg-neutral-card p-4 rounded-lg shadow mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <SelectField
+            label="Conta Caixa"
+            name="cashAccountCodeId"
+            value={filters.cashAccountCodeId}
+            onChange={handleFilterChange}
+            options={cashAccounts.map(ca => ({ value: ca.id, label: ca.name }))}
+            required
+          />
+          <InputField
+            label="Data Início"
+            name="startDate"
+            type="date"
+            value={filters.startDate}
+            onChange={handleFilterChange}
+          />
+          <InputField
+            label="Data Fim"
+            name="endDate"
+            type="date"
+            value={filters.endDate}
+            onChange={handleFilterChange}
+          />
+          <Button onClick={generateReport} variant="primary" className="h-10 self-end" leftIcon={ICONS.REPORTS}>Gerar Relatório</Button>
         </div>
       </div>
-      
-      <div className="bg-white p-6 rounded-lg shadow-md">
-         <h3 className="text-xl font-semibold text-primary mb-4">Lista Detalhada de Transações Liquidadas</h3>
-         <Table columns={tableColumns} data={filteredSettlements} emptyMessage="Nenhuma transação liquidada para os filtros selecionados."/>
-      </div>
 
+      {reportData && summary ? (
+        <>
+          <div className="mb-6 bg-neutral-card p-4 rounded-lg shadow">
+              <h3 className="text-lg font-semibold text-primary-dark mb-3">Resumo do Fluxo de Caixa</h3>
+              {selectedAccount && <p className="text-sm text-text-muted">Conta Caixa: <span className="font-medium text-text-dark">{selectedAccount.name}</span></p>}
+              <p className="text-sm text-text-muted">Período: <span className="font-medium text-text-dark">{filters.startDate ? new Date(filters.startDate).toLocaleDateString('pt-BR') : 'Desde o Início'} - {filters.endDate ? new Date(filters.endDate).toLocaleDateString('pt-BR') : 'Até Hoje'}</span></p>
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                <div>
+                    <p className="text-xs text-text-muted">Saldo Anterior</p>
+                    <p className="text-lg font-semibold text-primary-dark">R$ {summary.openingBalance.toFixed(2)}</p>
+                </div>
+                <div>
+                    <p className="text-xs text-text-muted">Total Entradas</p>
+                    <p className="text-lg font-semibold text-green-600">R$ {summary.totalInflows.toFixed(2)}</p>
+                </div>
+                <div>
+                    <p className="text-xs text-text-muted">Total Saídas</p>
+                    <p className="text-lg font-semibold text-red-600">R$ {summary.totalOutflows.toFixed(2)}</p>
+                </div>
+                <div>
+                    <p className="text-xs text-text-muted">Saldo Atual</p>
+                    <p className="text-lg font-semibold text-primary-dark">R$ {summary.closingBalance.toFixed(2)}</p>
+                </div>
+              </div>
+          </div>
+
+          <Table<CashFlowReportTransaction>
+            columns={columns}
+            data={reportData}
+            emptyStateMessage="Nenhuma transação encontrada para os filtros selecionados."
+          />
+        </>
+      ) : (
+        <div className="text-center py-8 text-text-muted bg-neutral-card rounded-lg shadow">
+          Selecione uma conta caixa e um período, depois clique em "Gerar Relatório" para visualizar o fluxo de caixa.
+        </div>
+      )}
     </div>
   );
 };
 
 export default CashFlowReportPage;
-    

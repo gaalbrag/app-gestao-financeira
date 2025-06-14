@@ -1,135 +1,152 @@
-
-export enum EntryType {
-  ACCOUNTING = 'Contábil',
-  FINANCIAL = 'Financeiro',
-}
-
-export enum TransactionType {
-  PRODUCT = 'Produto',
-  SERVICE = 'Serviço',
-}
-
-export enum EntryStatus {
-  PENDING = 'Pendente',
-  PARTIALLY_PAID = 'Parcialmente Pago/Recebido',
-  PAID = 'Pago/Recebido',
-}
-
-export enum UnitOfMeasure {
-  SQM = 'm²',
-  KG = 'kg',
-  UNIT = 'un',
-  HOUR = 'hr',
-  VB = 'vb', // Verba
-  M3 = 'm³'
-}
-
-export interface LineItem {
-  id: string; // Typically `li-${timestamp}`
-  itemName: string;
-  quantity: number;
-  unitOfMeasure: UnitOfMeasure;
-  unitPrice: number;
-  totalValue: number; // quantity * unitPrice
-}
-
-export type ExpenseId = `EXP-${string}`;
-export type RevenueId = `REV-${string}`;
-export type SettlementId = `SET-${'P'|'R'}-${string}`;
-export type ProjectId = `proj-${string}`;
-export type SupplierId = `sup-${string}`;
-export type CustomerId = `cust-${string}`;
-export type CashAccountId = `ca-${string}`;
-export type CostCenterId = `cc-${string}`;
-export type RevenueCategoryId = `revcat-${string}`;
-
-
-export interface BaseEntry {
-  id: string; // ExpenseId or RevenueId
-  entryType: EntryType;
-  invoiceNumber?: string;
-  projectId: ProjectId;
-  issueDate: string; // YYYY-MM-DD
-  description?: string;
-  cashAccountId: CashAccountId; 
-  costCenterId: CostCenterId | RevenueCategoryId; // Linked to CostCenter (for expenses) or RevenueCategory (for revenues)
-  lineItems: LineItem[];
-  totalAmount: number; // Sum of lineItems totalValue
-  amountPaid: number;
-  status: EntryStatus;
-}
-
-export interface ExpenseEntry extends BaseEntry {
-  id: ExpenseId;
-  supplierId: SupplierId;
-  disbursementDate: string; // Expected payment date (Vencimento)
-  transactionType: TransactionType;
-  costCenterId: CostCenterId;
-}
-
-export interface RevenueEntry extends BaseEntry {
-  id: RevenueId;
-  customerId: CustomerId;
-  expectedReceiptDate: string; // Expected receipt date
-  relatedProductId?: string; // e.g., Apartment 101
-  costCenterId: RevenueCategoryId; // For revenues, this links to RevenueCategory
-}
-
-export interface Settlement {
-  id: SettlementId;
-  entryId: ExpenseId | RevenueId; 
-  settlementDate: string; // YYYY-MM-DD
-  amountSettled: number;
-  cashAccountId: CashAccountId;
-  type: 'payment' | 'receipt';
-}
-
-export interface Project {
-  id: ProjectId;
+export interface NavItem {
   name: string;
-  description?: string;
-  isUserManaged?: boolean;
+  path: string;
+  icon?: React.ReactNode;
+  children?: NavItem[]; // Added for sub-navigation
 }
 
-export interface Supplier {
-  id: SupplierId;
+export interface Project { // Obra
+  id: string;
+  name: string; // Nome da Obra/ID
+  address: string; // Endereço
+  startDate: string; // Data de Início (ISO date string)
+}
+
+export interface Supplier { // Fornecedor
+  id: string;
   name: string;
-  contact?: string;
-  isUserManaged?: boolean;
+  contactPerson?: string; // Pessoa de Contato
+  email?: string;
+  phone?: string; // Telefone
 }
 
-export interface Customer {
-  id: CustomerId;
+export interface Customer { // Cliente
+  id: string;
   name: string;
-  contact?: string;
-  isUserManaged?: boolean;
+  contactPerson?: string; // Pessoa de Contato
+  email?: string;
+  phone?: string; // Telefone
 }
 
-export interface CashAccount {
-  id: CashAccountId;
-  name: string; 
-  isUserManaged?: boolean;
+export interface CashAccount { // Conta Caixa (Código de Caixa)
+  id: string;
+  name: string; // Nome da Conta (Ex: Banco Principal, Caixa Pequeno)
+  bank?: string; // Nome do Banco
+  agency?: string; // Agência Bancária
+  accountNumber?: string; // Número da Conta Bancária
+  balance?: number; // Saldo (Opcional, pode ser calculado dinamicamente)
 }
 
-export interface CostCenter {
-  id: CostCenterId;
+export interface RevenueCategory { // Categoria de Receita
+  id: string;
   name: string;
-  parentId: CostCenterId | null;
-  path?: string; // For display, e.g., "Custos > Estrutura > Fundações". Generated dynamically.
-  isProductLevel?: boolean; // True if it's a leaf node where expenses are booked
-  children?: CostCenter[]; // For hierarchical structure, often populated dynamically
-  isUserManaged?: boolean;
 }
 
-export interface RevenueCategory {
-  id: RevenueCategoryId;
+export interface CostCenterNode { // Centro de Custo
+  id: string;
   name: string;
-  isUserManaged?: boolean;
+  parentId: string | null; // Para facilitar a travessia e reconstrução da árvore
+  children: CostCenterNode[];
+  isLaunchable: boolean; // Indica se pode receber lançamentos diretos
 }
 
-export interface FilterState {
-  projectId?: ProjectId | string; // Allow string for initial empty filter
-  cashAccountId?: CashAccountId | string;
-  startDate?: string;
-  endDate?: string;
+export interface Product { // Produto
+  id: string;
+  name: string; // Nome do Produto
+  unit: string; // Unidade de Medida (e.g., kg, m³, un, pct)
+}
+
+export enum EntryType { // Tipo de Lançamento
+  ACCOUNTING = "Contábil",
+  FINANCIAL = "Financeiro",
+}
+
+export enum TransactionType { // Tipo de Transação
+  PRODUCT = "Produto",
+  SERVICE = "Serviço",
+}
+
+export enum EntryStatus { // Situação do Lançamento
+  UNPAID = "Em Aberto", // Despesa não paga
+  PARTIALLY_PAID = "Parcialmente Pago", // Despesa parcialmente paga
+  PAID = "Pago", // Despesa paga
+  UNRECEIVED = "Não Recebido", // Receita não recebida
+  PARTIALLY_RECEIVED = "Parcialmente Recebido", // Receita parcialmente recebida
+  RECEIVED = "Recebido", // Receita recebida
+}
+
+export interface LineItem { // Item do Lançamento
+  id: string;
+  description: string; // Descrição (pode ser auto-preenchida pelo produto ou customizada)
+  costCenterId: string; // Link para CostCenterNode (despesas) ou RevenueCategory (receitas - ID da categoria armazenado aqui)
+  amount: number; // Valor Total do Item (para despesas: quantity * unitPrice)
+
+  // Campos específicos para itens de despesa com produtos
+  productId?: string; // Link para Product
+  quantity?: number;
+  unitPrice?: number;
+}
+
+export interface BaseEntry { // Lançamento Base
+  id:string;
+  entryType: EntryType; // Tipo de Lançamento
+  invoiceNumber?: string; // Número da Nota Fiscal
+  projectId: string; // ID da Obra
+  issueDate: string; // Data de Emissão (ISO date string)
+  description: string; // Descrição geral do lançamento
+  totalAmount: number; // Valor Total (soma dos lineItems.amount)
+  settledAmount: number; // Valor Liquidado/Baixado
+  status: EntryStatus; // Situação
+  lineItems: LineItem[]; // Itens do Lançamento
+}
+
+export interface ExpenseEntry extends BaseEntry { // Lançamento de Despesa
+  supplierId: string; // ID do Fornecedor
+  disbursementDate: string; // Data de Desembolso (ISO date string)
+  transactionType: TransactionType; // Tipo de Transação
+  cashAccountCodeId: string; // ID da Conta Caixa (de onde será pago)
+}
+
+export interface RevenueEntry extends BaseEntry { // Lançamento de Receita
+  customerId: string; // ID do Cliente
+  receiptDate: string; // Data de Recebimento (ISO date string)
+  cashAccountCodeId: string; // ID da Conta Caixa (para onde será recebido)
+}
+
+export interface Settlement { // Baixa / Liquidação
+  id: string;
+  entryId: string; // ID do Lançamento de Despesa ou Receita
+  entryCategory: 'expense' | 'revenue'; // Categoria do Lançamento
+  settlementDate: string; // Data da Baixa (ISO date string)
+  amount: number; // Valor da Baixa
+  cashAccountCodeId: string; // ID da Conta Caixa usada para a baixa
+  notes?: string; // Observações
+}
+
+// Para relatórios
+export interface CostCenterSummary extends CostCenterNode { // Resumo do Centro de Custo
+  totalExpenses: number; // Total de Despesas
+  children: CostCenterSummary[]; // Sobrescreve para garantir que filhos também sejam CostCenterSummary
+}
+
+export interface CashFlowReportTransaction {
+  id: string;
+  date: string;
+  description: string;
+  inflow: number;
+  outflow: number;
+  runningBalance: number;
+  relatedEntryId?: string; // Optional: to link back to original expense/revenue if needed
+}
+
+export interface ProductPurchaseHistoryItem {
+    id: string; // Unique ID for the table row (can be expenseId + lineItemId)
+    expenseId: string;
+    expenseDate: string;
+    supplierName: string;
+    productName: string;
+    quantity: number;
+    unit: string;
+    unitPrice: number;
+    totalAmount: number;
 }

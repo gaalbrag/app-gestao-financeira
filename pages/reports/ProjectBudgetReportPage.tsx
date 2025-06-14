@@ -1,177 +1,224 @@
-
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useData } from '../../contexts/DataContext';
-import { Project, CostCenter, ExpenseEntry, FilterState, CostCenterId } from '../../types';
-import Select from '../../components/ui/Select';
-import Input from '../../components/ui/Input';
+import { Project, CostCenterNode, ExpenseEntry, CostCenterSummary } from '../../types';
+import SelectField from '../../components/ui/SelectField';
+import InputField from '../../components/ui/InputField';
 import Button from '../../components/ui/Button';
-import { FiChevronRight, FiChevronDown, FiFilter } from 'react-icons/fi';
+import { ICONS } from '../../constants';
+import { exportToCsv, ExportColumn } from '../../utils/exportCsv';
 
-interface ReportCostCenterNode extends CostCenter {
-  totalExpenses: number;
-  children: ReportCostCenterNode[]; // Always define children for report structure
+interface ReportFilters {
+  projectId: string;
+  startDate: string;
+  endDate: string;
 }
 
+const CostCenterSummaryRow: React.FC<{ node: CostCenterSummary; level: number }> = ({ node, level }) => {
+  const [isExpanded, setIsExpanded] = useState(true);
+  const hasChildren = node.children && node.children.length > 0;
+
+  return (
+    <>
+      <tr className={`${level % 2 === 0 ? 'bg-gray-50' : 'bg-neutral-card'} hover:bg-gray-100`}>
+        <td className="px-6 py-3 whitespace-nowrap text-sm text-text-dark" style={{ paddingLeft: `${1.5 + level * 1.5}rem` }}>
+          <div className="flex items-center">
+            {hasChildren && (
+              <button onClick={() => setIsExpanded(!isExpanded)} className="mr-2 text-primary-dark p-0.5 rounded hover:bg-gray-200">
+                {isExpanded ? ICONS.CHEVRON_DOWN : ICONS.CHEVRON_RIGHT}
+              </button>
+            )}
+            {node.name}
+             {node.isLaunchable && <span className="ml-2 px-1.5 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">L</span>}
+          </div>
+        </td>
+        <td className="px-6 py-3 whitespace-nowrap text-sm text-text-dark text-right font-medium">
+          R${node.totalExpenses.toFixed(2)}
+        </td>
+      </tr>
+      {isExpanded && hasChildren && node.children.map(child => (
+        <CostCenterSummaryRow key={child.id} node={child} level={level + 1} />
+      ))}
+    </>
+  );
+};
+
+interface FlatCostCenterSummary {
+  id: string;
+  path: string;
+  name: string;
+  isLaunchable: boolean;
+  totalExpenses: number;
+  level: number;
+}
+
+const flattenReportDataForExport = (nodes: CostCenterSummary[], level = 0, parentPath = ''): FlatCostCenterSummary[] => {
+  let flatList: FlatCostCenterSummary[] = [];
+  for (const node of nodes) {
+    const currentPath = parentPath ? `${parentPath} / ${node.name}` : node.name;
+    flatList.push({
+      id: node.id,
+      path: currentPath,
+      name: node.name,
+      isLaunchable: node.isLaunchable,
+      totalExpenses: node.totalExpenses,
+      level,
+    });
+    if (node.children && node.children.length > 0) {
+      flatList = flatList.concat(flattenReportDataForExport(node.children, level + 1, currentPath));
+    }
+  }
+  return flatList;
+};
+
+
 const ProjectBudgetReportPage: React.FC = () => {
-  const { state } = useData();
-  const [filters, setFilters] = useState<FilterState>({
-    projectId: state.projects[0]?.id || '',
+  const { projects, costCenters, expenseEntries } = useData();
+  const [filters, setFilters] = useState<ReportFilters>({
+    projectId: projects.length > 0 ? projects[0].id : '',
     startDate: '',
     endDate: '',
   });
+  const [reportData, setReportData] = useState<CostCenterSummary[] | null>(null);
 
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const formatCurrency = (amount: number) => 
-    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount);
+  const generateReport = () => {
+    const { projectId, startDate, endDate } = filters;
+    if (!projectId) {
+      alert("Por favor, selecione uma obra.");
+      return;
+    }
 
-  const reportData = useMemo(() => {
-    if (!filters.projectId) return { reportTree: [], projectTotalExpenses: 0, projectTotalRevenue: 0 };
-
-    const projectExpenses = state.expenseEntries.filter(exp => {
-      let dateMatch = true;
-      if (filters.startDate && filters.endDate) {
-        dateMatch = exp.issueDate >= filters.startDate && exp.issueDate <= filters.endDate;
-      } else if (filters.startDate) {
-        dateMatch = exp.issueDate >= filters.startDate;
-      } else if (filters.endDate) {
-        dateMatch = exp.issueDate <= filters.endDate;
+    const filteredExpenses = expenseEntries.filter(entry => {
+      let matches = entry.projectId === projectId;
+      if (startDate) matches = matches && new Date(entry.issueDate) >= new Date(startDate);
+      if (endDate) {
+        const inclusiveEndDate = new Date(endDate);
+        inclusiveEndDate.setDate(inclusiveEndDate.getDate() + 1);
+        matches = matches && new Date(entry.issueDate) < inclusiveEndDate;
       }
-      return exp.projectId === filters.projectId && dateMatch;
+      return matches;
     });
 
-    const projectRevenues = state.revenueEntries
-      .filter(rev => {
-        let dateMatch = true;
-        if (filters.startDate && filters.endDate) {
-          dateMatch = rev.issueDate >= filters.startDate && rev.issueDate <= filters.endDate;
-        } else if (filters.startDate) {
-          dateMatch = rev.issueDate >= filters.startDate;
-        } else if (filters.endDate) {
-          dateMatch = rev.issueDate <= filters.endDate;
-        }
-        return rev.projectId === filters.projectId && dateMatch;
-      })
-      .reduce((sum, rev) => sum + rev.totalAmount, 0);
+    const aggregateExpenses = (nodes: CostCenterNode[]): CostCenterSummary[] => {
+      return nodes.map(node => {
+        const calculateNodeTotal = (currentNode: CostCenterNode): number => {
+            let directSum = 0;
+            if (currentNode.isLaunchable) { // Only sum for launchable nodes directly, children sums are separate
+                filteredExpenses.forEach(entry => {
+                    entry.lineItems.forEach(item => {
+                        if (item.costCenterId === currentNode.id) {
+                            directSum += item.amount;
+                        }
+                    });
+                });
+            }
+            
+            let childrenSum = 0;
+            if (currentNode.children && currentNode.children.length > 0) {
+                 childrenSum = currentNode.children.reduce((sum, child) => sum + calculateNodeTotal(child), 0);
+            }
+            return directSum + childrenSum;
+        };
+        
+        const nodeTotal = calculateNodeTotal(node);
 
-    const projectTotalExpensesFromDirectEntries = projectExpenses.reduce((sum, exp) => sum + exp.totalAmount, 0);
-    
-    const buildReportTreeRecursive = (parentId: CostCenterId | null, allCCs: CostCenter[]): ReportCostCenterNode[] => {
-        return allCCs
-            .filter(cc => cc.parentId === parentId)
-            .map(cc => {
-                const children = buildReportTreeRecursive(cc.id, allCCs);
-                let nodeTotalExpenses = 0;
-
-                // Sum expenses directly associated with this node (if it's a productLevel)
-                if (cc.isProductLevel) {
-                    nodeTotalExpenses += projectExpenses
-                        .filter(exp => exp.costCenterId === cc.id)
-                        .reduce((sum, exp) => sum + exp.totalAmount, 0);
-                }
-                
-                // Sum expenses from children
-                nodeTotalExpenses += children.reduce((sum, child) => sum + child.totalExpenses, 0);
-                
-                return {
-                    ...cc,
-                    totalExpenses: nodeTotalExpenses,
-                    children: children,
-                };
-            });
+        return {
+          ...node,
+          totalExpenses: nodeTotal,
+          children: node.children ? aggregateExpenses(node.children) : [],
+        };
+      });
     };
     
-    const reportTree = buildReportTreeRecursive(null, state.costCenters);
-    
-    // The projectTotalExpenses should be the sum of expenses from root cost centers in the report tree
-    const calculatedProjectTotalExpenses = reportTree.reduce((sum, rootNode) => sum + rootNode.totalExpenses, 0);
-
-    return { reportTree, projectTotalExpenses: calculatedProjectTotalExpenses, projectTotalRevenue: projectRevenues };
-
-  }, [filters, state.expenseEntries, state.revenueEntries, state.costCenters]);
-
-  const CostCenterRow: React.FC<{ node: ReportCostCenterNode; level: number }> = ({ node, level }) => {
-    const [isOpen, setIsOpen] = useState(level < 2); // Auto-open more levels for reports
-    return (
-      <>
-        <tr className={`${level === 0 ? 'bg-gray-100 font-semibold' : ''} ${node.totalExpenses === 0 && level > 0 ? 'text-gray-400' : ''}`}>
-          <td className="py-2 px-3 border-b" style={{ paddingLeft: `${10 + level * 20}px` }}>
-            <div className="flex items-center">
-              {node.children && node.children.length > 0 && (
-                <button onClick={() => setIsOpen(!isOpen)} className="mr-2 text-primary hover:text-accent">
-                  {isOpen ? <FiChevronDown /> : <FiChevronRight />}
-                </button>
-              )}
-              {(!node.children || node.children.length === 0) && <span className="w-6 mr-2"></span>}
-              {node.name}
-            </div>
-          </td>
-          <td className="py-2 px-3 border-b text-right">{formatCurrency(node.totalExpenses)}</td>
-        </tr>
-        {isOpen && node.children?.map(child => <CostCenterRow key={child.id} node={child} level={level + 1} />)}
-      </>
-    );
+    setReportData(aggregateExpenses(costCenters));
   };
   
-  const selectedProjectName = state.projects.find(p => p.id === filters.projectId)?.name;
+  useEffect(() => { 
+    if (filters.projectId) {
+        generateReport();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.projectId, filters.startDate, filters.endDate, expenseEntries, costCenters]);
+
+  const handleExport = () => {
+    if (!reportData) {
+      alert("Não há dados para exportar. Gere o relatório primeiro.");
+      return;
+    }
+    const flatData = flattenReportDataForExport(reportData);
+    const exportColumns: ExportColumn<FlatCostCenterSummary>[] = [
+      { header: 'Caminho Completo', accessor: (item) => item.path },
+      { header: 'Nome Centro de Custo', accessor: (item) => item.name },
+      { header: 'É Lançável?', accessor: (item) => item.isLaunchable ? 'Sim' : 'Não'},
+      { header: 'Nível', accessor: (item) => item.level.toString() },
+      { header: 'Despesas Totais (R$)', accessor: (item) => item.totalExpenses.toFixed(2) },
+    ];
+    const selectedProject = projects.find(p => p.id === filters.projectId);
+    const filename = `analise_orcamentaria_${selectedProject ? selectedProject.name.replace(/\s+/g, '_') : 'obra'}`;
+    exportToCsv(filename, flatData, exportColumns);
+  };
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-semibold text-primary">Relatório de Orçamento por Projeto</h2>
+    <div className="p-6 bg-neutral-bg min-h-full">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-semibold text-primary-dark">Análise Orçamentária da Obra</h1>
+        <Button onClick={handleExport} variant="secondary" leftIcon={ICONS.DOWNLOAD} disabled={!reportData}>
+            Exportar CSV
+        </Button>
+      </div>
       
-      <div className="bg-white p-4 rounded-lg shadow-md space-y-4 md:flex md:space-x-4 items-end">
-        <Select label="Selecionar Projeto" name="projectId" value={filters.projectId || ''} onChange={handleFilterChange} containerClassName="flex-1">
-          <option value="">Selecione um Projeto</option>
-          {state.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </Select>
-        <Input label="Data Inicial (Lançamento)" type="date" name="startDate" value={filters.startDate || ''} onChange={handleFilterChange} containerClassName="flex-1"/>
-        <Input label="Data Final (Lançamento)" type="date" name="endDate" value={filters.endDate || ''} onChange={handleFilterChange} containerClassName="flex-1"/>
-        <Button variant="ghost" onClick={() => setFilters({ projectId: state.projects[0]?.id || '', startDate: '', endDate: ''})} leftIcon={<FiFilter />}>Limpar Filtros</Button>
+      <div className="bg-neutral-card p-4 rounded-lg shadow mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <SelectField
+            label="Obra"
+            name="projectId"
+            value={filters.projectId}
+            onChange={handleFilterChange}
+            options={projects.map(p => ({ value: p.id, label: p.name }))}
+            required
+          />
+          <InputField
+            label="Data Início (Emissão NF)"
+            name="startDate"
+            type="date"
+            value={filters.startDate}
+            onChange={handleFilterChange}
+          />
+          <InputField
+            label="Data Fim (Emissão NF)"
+            name="endDate"
+            type="date"
+            value={filters.endDate}
+            onChange={handleFilterChange}
+          />
+          <Button onClick={generateReport} variant="primary" className="h-10">Gerar Relatório</Button>
+        </div>
       </div>
 
-      {filters.projectId && selectedProjectName && (
-        <div className="bg-white p-6 rounded-lg shadow-md">
-          <h3 className="text-xl font-semibold text-primary mb-4">Análise do Projeto: {selectedProjectName}</h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div className="bg-red-50 p-4 rounded-md shadow border-l-4 border-red-500">
-                <p className="text-sm text-red-700">Total de Despesas (Projeto)</p>
-                <p className="text-2xl font-bold text-red-700">{formatCurrency(reportData.projectTotalExpenses)}</p>
-            </div>
-            <div className="bg-green-50 p-4 rounded-md shadow border-l-4 border-green-500">
-                <p className="text-sm text-green-700">Total de Receitas (Projeto)</p>
-                <p className="text-2xl font-bold text-green-700">{formatCurrency(reportData.projectTotalRevenue)}</p>
-            </div>
-             <div className={`${reportData.projectTotalRevenue - reportData.projectTotalExpenses >= 0 ? 'bg-blue-50 border-blue-500' : 'bg-orange-50 border-orange-500'} p-4 rounded-md shadow border-l-4`}>
-                <p className={`text-sm ${reportData.projectTotalRevenue - reportData.projectTotalExpenses >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>Resultado (Receitas - Despesas)</p>
-                <p className={`text-2xl font-bold ${reportData.projectTotalRevenue - reportData.projectTotalExpenses >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>
-                    {formatCurrency(reportData.projectTotalRevenue - reportData.projectTotalExpenses)}
-                </p>
-            </div>
-          </div>
-
-          <h4 className="text-lg font-semibold text-primary mb-2">Despesas por Centro de Custo:</h4>
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white border">
-              <thead className="bg-primary text-white">
-                <tr>
-                  <th className="py-2 px-3 text-left">Centro de Custo</th>
-                  <th className="py-2 px-3 text-right">Total Despesas</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reportData.reportTree.map(node => <CostCenterRow key={node.id} node={node} level={0} />)}
-                 {reportData.reportTree.length === 0 && (
-                    <tr><td colSpan={2} className="p-4 text-center text-gray-500">Nenhum dado de centro de custo para este projeto/filtro.</td></tr>
-                 )}
-              </tbody>
-            </table>
-          </div>
+      {reportData ? (
+        <div className="bg-neutral-card shadow-md rounded-lg overflow-hidden border border-neutral-light-gray">
+          <table className="min-w-full divide-y divide-neutral-light-gray">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-text-muted uppercase tracking-wider">Centro de Custo</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-text-muted uppercase tracking-wider">Despesas Totais (R$)</th>
+              </tr>
+            </thead>
+            <tbody className="bg-neutral-card divide-y divide-neutral-light-gray">
+              {reportData.length > 0 ? reportData.map(node => (
+                <CostCenterSummaryRow key={node.id} node={node} level={0} />
+              )) : (
+                <tr><td colSpan={2} className="text-center py-4 text-text-muted">Nenhum dado para os filtros selecionados.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
+      ) : (
+        <p className="text-center text-text-muted py-8">Selecione os filtros e clique em "Gerar Relatório" para visualizar os dados.</p>
       )}
-       {(!filters.projectId || !selectedProjectName) && <p className="text-center text-gray-500 mt-6">Por favor, selecione um projeto para visualizar o relatório.</p>}
     </div>
   );
 };

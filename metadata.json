@@ -1,6 +1,6 @@
-
 {
-  "name": "APUS Construtora - Sistema de Gestão",
-  "description": "Um sistema abrangente de gestão financeira e de projetos para construtoras, incluindo lançamentos de despesas e receitas, liquidações e orçamentação de projetos."
+  "name": "Apus - Gestão Financeira",
+  "description": "A comprehensive Financial and Project Management System for construction companies, featuring expense/revenue tracking, settlement management, detailed reporting, and a robust administration panel for master data including hierarchical cost centers.",
+  "requestFramePermissions": [],
+  "prompt": ""
 }
-    

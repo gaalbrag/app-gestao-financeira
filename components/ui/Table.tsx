@@ -1,67 +1,64 @@
-
 import React, { ReactNode } from 'react';
 
-interface TableColumn<T> {
-  Header: string;
-  accessor: keyof T | ((row: T) => ReactNode);
-  cellClassName?: string;
+interface Column<T> {
+  header: string;
+  accessor: keyof T | ((item: T) => ReactNode);
+  className?: string;
   headerClassName?: string;
 }
 
 interface TableProps<T> {
-  columns: TableColumn<T>[];
+  columns: Column<T>[];
   data: T[];
-  onRowClick?: (row: T) => void;
-  emptyMessage?: string;
+  onRowClick?: (item: T) => void;
+  isLoading?: boolean;
+  emptyStateMessage?: string;
 }
 
-const Table = <T extends object,>({ columns, data, onRowClick, emptyMessage = "Nenhum dado disponível." }: TableProps<T>): React.ReactElement => {
+const Table = <T extends { id: string | number }, >({ columns, data, onRowClick, isLoading = false, emptyStateMessage = "Nenhum dado disponível." }: TableProps<T>): React.ReactNode => {
+  if (isLoading) {
+    return <div className="text-center py-8 text-text-muted">Carregando dados...</div>;
+  }
+
+  if (!data || data.length === 0) {
+    return <div className="text-center py-8 text-text-muted">{emptyStateMessage}</div>;
+  }
+  
   return (
-    <div className="overflow-x-auto shadow-md rounded-lg">
-      <table className="min-w-full divide-y divide-gray-200 bg-white">
-        <thead className="bg-primary">
+    <div className="overflow-x-auto shadow-md rounded-lg border border-neutral-light-gray">
+      <table className="min-w-full divide-y divide-neutral-light-gray bg-neutral-card">
+        <thead className="bg-gray-50">
           <tr>
-            {columns.map((column, index) => (
+            {columns.map((col, index) => (
               <th
                 key={index}
                 scope="col"
-                className={`px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider ${column.headerClassName || ''}`}
+                className={`px-6 py-3 text-left text-xs font-medium text-text-muted uppercase tracking-wider ${col.headerClassName || ''}`}
               >
-                {column.Header}
+                {col.header}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
-          {data.length === 0 ? (
-            <tr>
-              <td colSpan={columns.length} className="px-6 py-4 text-center text-gray-500">
-                {emptyMessage}
-              </td>
+        <tbody className="bg-neutral-card divide-y divide-neutral-light-gray">
+          {data.map((item) => (
+            <tr 
+              key={item.id} 
+              className={`hover:bg-gray-50 ${onRowClick ? 'cursor-pointer' : ''}`}
+              onClick={() => onRowClick && onRowClick(item)}
+            >
+              {columns.map((col, index) => (
+                <td 
+                  key={index} 
+                  className={`px-6 py-4 whitespace-nowrap text-sm text-text-dark ${col.className || ''}`}
+                >
+                  {typeof col.accessor === 'function'
+                    ? col.accessor(item)
+                    : (item[col.accessor] as ReactNode)}
+                </td>
+              ))}
             </tr>
-          ) : (
-            data.map((row, rowIndex) => (
-              <tr 
-                key={rowIndex} 
-                className={`${onRowClick ? 'hover:bg-gray-100 cursor-pointer' : ''} transition-colors`}
-                onClick={() => onRowClick?.(row)}
-              >
-                {columns.map((column, colIndex) => {
-                  const value = typeof column.accessor === 'function'
-                    ? column.accessor(row)
-                    : (row[column.accessor] as ReactNode);
-                  return (
-                    <td
-                      key={colIndex}
-                      className={`px-6 py-4 whitespace-nowrap text-sm text-gray-700 ${column.cellClassName || ''}`}
-                    >
-                      {value}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))
-          )}
+          ))}
         </tbody>
       </table>
     </div>
@@ -69,4 +66,3 @@ const Table = <T extends object,>({ columns, data, onRowClick, emptyMessage = "N
 };
 
 export default Table;
-    
