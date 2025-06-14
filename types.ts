@@ -53,7 +53,7 @@ export interface CostCenterNode { // Centro de Custo
 export interface Product { // Produto
   id: string;
   name: string; // Nome do Produto
-  unit: string; // Unidade de Medida (e.g., kg, m³, un, pct)
+  unit: UnitOfMeasure; // Unidade de Medida (e.g., kg, m³, un, pct)
 }
 
 export enum EntryType { // Tipo de Lançamento
@@ -149,4 +149,16 @@ export interface ProductPurchaseHistoryItem {
     unit: string;
     unitPrice: number;
     totalAmount: number;
+}
+
+export enum UnitOfMeasure {
+  UNIT = 'un',       // Unidade
+  KILOGRAM = 'kg',   // Quilograma
+  LITER = 'l',       // Litro
+  METER = 'm',       // Metro
+  SQUARE_METER = 'm²', // Metro quadrado
+  CUBIC_METER = 'm³', // Metro cúbico
+  PACKAGE = 'pct',   // Pacote
+  HOUR = 'h',        // Hora
+  DAY = 'd',         // Dia
 }
